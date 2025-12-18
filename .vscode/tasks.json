@@ -1,0 +1,38 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "Build SFML Game",
+            "command": "g++",
+            "args": [
+                "-g",
+                "${file}",
+                "-o",
+                "${fileDirname}\\${fileBasenameNoExtension}.exe",
+                "-IC:\\Users\\ILLEGEAR\\Downloads\\SFML-3.0.2-windows-gcc-14.2.0-mingw-64-bit\\SFML-3.0.2\\include",
+                "-LC:\\Users\\ILLEGEAR\\Downloads\\SFML-3.0.2-windows-gcc-14.2.0-mingw-64-bit\\SFML-3.0.2\\lib",
+                "-lsfml-graphics",
+                "-lsfml-window",
+                "-lsfml-system"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Compiler: g++ with SFML libraries"
+        },
+        {
+            "label": "Run Game",
+            "type": "shell",
+            "command": "${fileDirname}\\${fileBasenameNoExtension}.exe",
+            "group": "test",
+            "dependsOn": "Build SFML Game",
+            "problemMatcher": []
+        }
+    ]
+}
