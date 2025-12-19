@@ -4,51 +4,57 @@
 #include <algorithm>
 #include <optional>
 #include <ctime>
-#include <iostream>
+#include <cstdlib>
 
 constexpr float PI = 3.14159265f;
 
-// --- Bullet Structure ---
+// --- Projectile Structures ---
 struct Bullet {
     sf::CircleShape shape;
     sf::Vector2f velocity;
+    sf::Vector2f startPos; 
+    bool isPoprock = false;  
+    bool isShard = false;    
+    bool isPhase3Shot = false; 
+    float lifeTime = -1.0f; 
+    float aliveTime = 0.f;
 
-    Bullet(sf::Vector2f position, float angle, float speed) {
-        shape.setRadius(7.0f);
-        shape.setFillColor(sf::Color::Red);
-        shape.setOrigin({7.0f, 7.0f});
+    Bullet(sf::Vector2f position, float angle, float speed, float radius, bool pop = false, float life = -1.0f) {
+        shape.setRadius(radius);
+        shape.setFillColor(sf::Color::Red); // Default fallback color
+        shape.setOrigin({radius, radius}); 
         shape.setPosition(position);
+        startPos = position;
+        isPoprock = pop;
+        lifeTime = life;
+        
         float radians = angle * (PI / 180.0f);
         velocity = { std::cos(radians) * speed, std::sin(radians) * speed };
     }
-    void update(float dt) { shape.move(velocity * dt * 60.0f); }
+    void update(float dt) { 
+        shape.move(velocity * dt * 60.0f); 
+        aliveTime += dt;
+    }
 };
 
-struct Laser {
-    sf::RectangleShape shape;
-    float duration;
-    sf::Vector2f direction;
-    sf::Vector2f startPos;
-};
-
-struct BorderLaser {
-    sf::RectangleShape shape;
-    float timer;
-    sf::Vector2f direction;
-    sf::Vector2f startPos;
-};
-
-struct Turret {
+struct PlayerBullet {
     sf::CircleShape shape;
-    float timer;
-    bool hasShot;
+    sf::Vector2f velocity;
+    PlayerBullet(sf::Vector2f pos, sf::Vector2f target) {
+        shape.setRadius(5.f);
+        shape.setFillColor(sf::Color::Yellow);
+        shape.setOrigin({5.f, 5.f});
+        shape.setPosition(pos);
+        sf::Vector2f dir = target - pos;
+        float mag = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+        velocity = (mag != 0) ? (dir / mag) * 15.f : sf::Vector2f(0, 0);
+    }
+    void update() { shape.move(velocity); }
 };
 
 int main() {
     srand(static_cast<unsigned int>(time(NULL)));
-    // 1. Setup Window & View
-    sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
-    sf::RenderWindow window(desktop, "Just Dodge Clone", sf::State::Fullscreen);
+    sf::RenderWindow window(sf::VideoMode::getDesktopMode(), "Oryx Sanctuary Mini", sf::State::Fullscreen);
     window.setFramerateLimit(60);
 
     float worldW = 1920.f;
@@ -56,422 +62,419 @@ int main() {
     sf::View gameView(sf::FloatRect({0.f, 0.f}, {worldW, worldH}));
     window.setView(gameView);
 
-    // 2. GAME VARIABLES (Put new timers here)
-    bool isGameOver = false;
-    float health = 100.f;
-    float bossTimer = 0.f;
-    float spawnTimer = 0.f;
-    float levelTimer = 0.f;
-    bool isTransforming = false;
-    float transformTimer = 0.f;
-    int lastPhase = -1;
-    int currentPhase = 1;
+    bool isGameOver = false, isVictory = false;
+    float playerHealth = 1000.f, bossMaxHP = 8000.f, bossCurrentHP = bossMaxHP;
+    float bossTimer = 0.f, spawnTimer = 0.f, survivalSpawnTimer = 0.f, patternTimer = 0.f, warningTimer = 0.f, survivalTimer = 0.f;
+    bool isWarning = false, isSurvival = false, isSurvivalWarning = false;
+    int currentPhase = 1, nextThreshold = 1;
     
     std::vector<Bullet> bullets;
-    std::vector<Turret> turrets;
-    std::vector<Laser> lasers;
-    std::vector<BorderLaser> borderLasers;
-    std::vector<sf::RectangleShape> warningLines;
-    float turretSpawnTimer = 0.f;
-    float borderLaserSpawnTimer = 0.f;
+    std::vector<PlayerBullet> playerBullets;
+    sf::Clock gameClock, hitTimer, shootTimer, shotgunTimer;
 
-    sf::Clock gameClock, hitTimer;
-
-    // 3. Game Objects
     sf::CircleShape player(15.0f);
     player.setFillColor(sf::Color::Cyan);
-    player.setOrigin({15.0f, 15.0f});
-
+    player.setOrigin({15.f, 15.f});
+    
     sf::RectangleShape boss({80.f, 80.f});
-    boss.setOrigin({40.f, 40.f}); // Initial color set in reset function
+    boss.setOrigin({40.f, 40.f});
 
-    sf::RectangleShape deathScreen({worldW, worldH});
-    deathScreen.setFillColor(sf::Color(255, 0, 0, 100));
+    sf::RectangleShape leftVoid, rightVoid;
+    leftVoid.setFillColor(sf::Color(20, 0, 40));
+    rightVoid.setFillColor(sf::Color(20, 0, 40));
 
-    // HP Bar
-    sf::RectangleShape hpBarBack({40.f, 5.f});
-    hpBarBack.setFillColor(sf::Color::Red);
-    hpBarBack.setOrigin({20.f, 0.f});
-
-    sf::RectangleShape hpBarFront({40.f, 5.f});
-    hpBarFront.setFillColor(sf::Color::Green);
-    hpBarFront.setOrigin({20.f, 0.f});
+    sf::RectangleShape bHPB({800.f, 20.f});
+    bHPB.setFillColor(sf::Color(50, 50, 50));
+    bHPB.setOrigin({400.f, 0.f});
+    bHPB.setPosition({worldW/2.f, 30.f});
+    
+    sf::RectangleShape bHPF({800.f, 20.f});
+    bHPF.setFillColor(sf::Color::Red);
+    bHPF.setOrigin({400.f, 0.f});
+    bHPF.setPosition({worldW/2.f, 30.f});
+    
+    sf::RectangleShape hpB({40.f, 5.f}), hpF({40.f, 5.f});
+    hpB.setFillColor(sf::Color::Red);
+    hpF.setFillColor(sf::Color::Green);
 
     auto resetGame = [&]() {
-        health = 100.f;
+        playerHealth = 1000.f;
+        bossCurrentHP = bossMaxHP;
         bullets.clear();
-        turrets.clear();
-        lasers.clear();
-        borderLasers.clear();
-        warningLines.clear();
-        turretSpawnTimer = 0.f;
-        borderLaserSpawnTimer = 0.f;
-        bossTimer = 0.f;
-        spawnTimer = 0.f;
-        levelTimer = 0.f;
+        playerBullets.clear();
+        
+        bossTimer = spawnTimer = survivalSpawnTimer = patternTimer = warningTimer = survivalTimer = 0.f;
+        isSurvival = isSurvivalWarning = isWarning = isGameOver = isVictory = false;
+        nextThreshold = 1;
         currentPhase = 1;
-        lastPhase = 1;
-        isTransforming = false;
-        transformTimer = 0.f;
-        boss.setFillColor(sf::Color::Magenta);
-        player.setPosition({worldW / 2.f, worldH * 0.8f});
-        boss.setPosition({worldW / 2.f, worldH * 0.2f});
-        isGameOver = false;
-        std::cout << "Game Reset!" << std::endl;
+        
+        player.setPosition({worldW/2.f, worldH * 0.8f});
+        boss.setPosition({worldW/2.f, 200.f});
     };
-
     resetGame();
 
-    // --- MAIN LOOP ---
     while (window.isOpen()) {
         float dt = gameClock.restart().asSeconds();
-
         while (const std::optional event = window.pollEvent()) {
-            if (event->is<sf::Event::Closed>()) window.close();
-            if (const auto* keyPressed = event->getIf<sf::Event::KeyPressed>()) {
-                if (keyPressed->code == sf::Keyboard::Key::Escape) window.close();
-                if (isGameOver && keyPressed->code == sf::Keyboard::Key::R) resetGame();
+            if (event->is<sf::Event::Closed>()) {
+                window.close();
+            }
+            if (const auto* kp = event->getIf<sf::Event::KeyPressed>()) {
+                if (kp->code == sf::Keyboard::Key::Escape) {
+                    window.close();
+                }
+                if ((isGameOver || isVictory) && kp->code == sf::Keyboard::Key::R) {
+                    resetGame();
+                }
             }
         }
 
-        if (!isGameOver) {
-            warningLines.clear();
-            levelTimer += dt;
-            bossTimer += dt;
+        if (!isGameOver && !isVictory) {
+            sf::Vector2f bPos = boss.getPosition();
+            sf::Vector2f pPos = player.getPosition();
 
-            int targetPhase = 1;
+            if (!isSurvival && !isSurvivalWarning && (bossCurrentHP/bossMaxHP) < (1.0f - (nextThreshold * 0.3f))) {
+                isSurvivalWarning = true;
+                warningTimer = 0.f;
+                bullets.clear();
+                survivalSpawnTimer = 0.f;
+            }
             
-            if (levelTimer > 30.0f) targetPhase = 4;
-            else if (levelTimer > 20.0f) targetPhase = 3;
-            else if (levelTimer > 10.0f) targetPhase = 2;
-
-            // Detect Phase Changes
-            if (targetPhase != currentPhase && !isTransforming) {
-                isTransforming = true;
-                transformTimer = 0.f;
-                currentPhase = targetPhase;
-                
-                // Move boss to center for transformation
-                boss.setPosition({worldW / 2.f, worldH / 2.f});
+            if (!isSurvival && !isSurvivalWarning) {
+                patternTimer += dt;
+                float dur = (currentPhase == 6) ? 6.f : 8.f;
+                if (patternTimer >= dur) {
+                    isWarning = true;
+                    warningTimer = 0.f;
+                    
+                    int nextP;
+                    do {
+                        nextP = (rand()%6)+1;
+                    } while (nextP == currentPhase);
+                    
+                    currentPhase = nextP;
+                    patternTimer = 0.f;
+                }
             }
 
-            if (isTransforming) {
-                transformTimer += dt;
-                boss.setFillColor(sf::Color::Blue);
-                // Keep boss at center during transformation
-                boss.setPosition({worldW / 2.f, worldH / 2.f});
-
-                if (transformTimer >= 2.0f) {
-                    isTransforming = false;
-                    // Reset boss timer so movement patterns start fresh
-                    bossTimer = 0.f;
-                    }
+            // --- BOSS STATE & MOVEMENT ---
+            if (isSurvivalWarning) {
+                warningTimer += dt;
+                boss.setFillColor(static_cast<int>(warningTimer * 15) % 2 == 0 ? sf::Color::Blue : sf::Color::Black);
+                sf::Vector2f target = (nextThreshold == 1) ? sf::Vector2f(worldW/2.f, 150.f) : sf::Vector2f(worldW/2.f, worldH/2.f);
+                boss.move((target - bPos) * 0.05f);
+                
+                if (warningTimer >= 2.0f) {
+                    isSurvivalWarning = false;
+                    isSurvival = true;
+                    survivalTimer = 0.f;
+                    survivalSpawnTimer = 0.f;
+                    nextThreshold++;
+                }
+            } else if (isSurvival) {
+                survivalTimer += dt;
+                boss.setFillColor(nextThreshold == 4 ? sf::Color(255, 69, 0) : sf::Color::Blue);
+                sf::Vector2f target = (nextThreshold == 2) ? sf::Vector2f(worldW/2.f, 150.f) : sf::Vector2f(worldW/2.f, worldH/2.f);
+                boss.move((target - bPos) * 0.05f);
+                
+                if (survivalTimer >= 15.0f) {
+                    isSurvival = false;
+                    isWarning = true;
+                    warningTimer = 0.f;
+                    bullets.clear();
+                }
+            } else if (isWarning) {
+                warningTimer += dt;
+                sf::Color tc;
+                if (currentPhase == 1) tc = sf::Color::Magenta;
+                else if (currentPhase == 2) tc = sf::Color::Yellow;
+                else if (currentPhase == 3) tc = sf::Color::Green;
+                else if (currentPhase == 4) tc = sf::Color::Red;
+                else if (currentPhase == 5) tc = sf::Color::White;
+                else tc = sf::Color(255, 128, 0);
+                
+                if (static_cast<int>(warningTimer * 12) % 2 == 0) {
+                    boss.setFillColor(sf::Color::White);
                 } else {
-                    if (currentPhase == 1)
-                        boss.setFillColor(sf::Color::Magenta);
-                    else if (currentPhase == 2) 
-                        boss.setFillColor(sf::Color::Yellow);
-                    else if (currentPhase == 3) 
-                        boss.setFillColor(sf::Color::Green);
-                    else if (currentPhase == 4)
-                        boss.setFillColor(sf::Color::Red);
-        }
-
-            // Move Boss
-            if (isTransforming) {
-                // Stay at center during transformation
-                boss.setPosition({worldW / 2.f, worldH / 2.f});
-            }
-            else if (currentPhase == 3) {
-                // Move along the border
-                float speed = 2000.f; // Speed of boss along border
-                float perimeter = 2 * (worldW + worldH);
-                float dist = std::fmod(bossTimer * speed, perimeter);
+                    boss.setFillColor(tc);
+                }
                 
-                if (dist < worldW) { 
-                    // Top Edge (Moving Right)
-                    boss.setPosition({dist, 40.f}); 
-                } else if (dist < worldW + worldH) { 
-                    // Right Edge (Moving Down)
-                    boss.setPosition({worldW - 40.f, dist - worldW}); 
-                } else if (dist < 2 * worldW + worldH) { 
-                    // Bottom Edge (Moving Left)
-                    boss.setPosition({worldW - (dist - (worldW + worldH)), worldH - 40.f}); 
-                } else { 
-                    // Left Edge (Moving Up)
-                    boss.setPosition({40.f, worldH - (dist - (2 * worldW + worldH))}); 
+                sf::Vector2f sp = (currentPhase == 2) ? sf::Vector2f(worldW/2.f, 200.f) :
+                                  (currentPhase == 3) ? sf::Vector2f(worldW/2.f+400.f, worldH/2.f) :
+                                  (currentPhase == 6) ? sf::Vector2f(worldW-100.f, worldH/2.f) :
+                                  sf::Vector2f(worldW/2.f, worldH/2.f);
+                boss.move((sp - bPos) * 0.08f);
+                
+                if (warningTimer >= 2.0f) {
+                    isWarning = false;
+                    bossTimer = 0.f;
+                    spawnTimer = 0.f;
                 }
             } else {
-                // Normal Figure-8 Movement
-                boss.setPosition({worldW/2.f + std::cos(bossTimer) * 600.f, 300.f + std::sin(bossTimer * 2.f) * 150.f});
-            }
-            // Move Player
-            float pSpeed = 400.f;
-            sf::Vector2f mvt{0.f, 0.f};
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W)) mvt.y -= pSpeed * dt;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S)) mvt.y += pSpeed * dt;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A)) mvt.x -= pSpeed * dt;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D)) mvt.x += pSpeed * dt;
-            player.move(mvt);
-
-            // Keep player inside screen
-            sf::Vector2f pos = player.getPosition();
-            float r = player.getRadius();
-            if (pos.x < r) pos.x = r;
-            if (pos.x > worldW - r) pos.x = worldW - r;
-            if (pos.y < r) pos.y = r;
-            if (pos.y > worldH - r) pos.y = worldH - r;
-            player.setPosition(pos);
-
-            // Update HP Bar
-            hpBarBack.setPosition({pos.x, pos.y + 20.f});
-            hpBarFront.setPosition({pos.x, pos.y + 20.f});
-            float hpPercent = std::max(0.f, health / 100.f);
-            hpBarFront.setSize({40.f * hpPercent, 5.f});
-
-            // Attack Patterns
-            spawnTimer += dt;
-            
-            // Burst logic for Phase 4
-            static int p4Burst = 0;
-            float fireRate = 0.06f;
-            if (currentPhase == 4) {
-                fireRate = 0.1f;
-            } else if (currentPhase == 3) {
-                // Fire fast (0.3s) for first 2 shots, then wait long (1.5s) for the 3rd reset
-                fireRate = (p4Burst < 2) ? 0.3f : 1.5f;
-            }
-
-            if (spawnTimer > fireRate && !isTransforming) {
-                float angle = std::sin(bossTimer) * 360.f;
-
-                if (currentPhase == 1) {
-                    bullets.emplace_back(boss.getPosition(), angle, 9.0f);
-                    bullets.emplace_back(boss.getPosition(), angle + 180.f, 9.0f);
-                } 
+                bossTimer += dt;
+                if (currentPhase == 1 || currentPhase == 5) {
+                    boss.move(((sf::Vector2f(worldW/2.f, worldH/2.f)) - bPos) * 0.05f);
+                }
                 else if (currentPhase == 2) {
-                    for (int i = 0; i < 5; i++) {
-                        // 1. Top -> Down (Angle 90)
-                        float randomX1 = static_cast<float>(std::rand() % (int)worldW);
-                        bullets.emplace_back(sf::Vector2f{randomX1, -50.f}, 90.f, 10.0f);
-
-                        // 2. Bottom -> Up (Angle 270)
-                        float randomX2 = static_cast<float>(std::rand() % (int)worldW);
-                        bullets.emplace_back(sf::Vector2f{randomX2, worldH + 50.f}, 270.f, 10.0f);
-                    }
-                    spawnTimer = 0.0f;
+                    boss.setPosition({worldW/2.f + std::cos(bossTimer) * 600.f, 200.f + std::sin(bossTimer * 2.f) * 100.f});
+                }
+                else if (currentPhase == 3) {
+                    float a = bossTimer * 1.25f;
+                    boss.setPosition({worldW/2.f + std::cos(a) * 400.f, worldH/2.f + std::sin(a) * 400.f});
                 }
                 else if (currentPhase == 4) {
-                    // 6-way chaos
-                    static float flowerRotation = 0.f;
-                    flowerRotation += 15.f;
-                    for (int i= 0; i < 360; i += 60) {
-                        bullets.emplace_back(boss.getPosition(), flowerRotation + i, 11.0f);
-                    }
-
-                    // Border Lasers
-                    borderLaserSpawnTimer += dt;
-                    if (borderLaserSpawnTimer > 1.5f) {
-                        BorderLaser bl;
-                        bl.timer = 0.f;
-                        
-                        // Random border position
-                        int side = rand() % 4;
-                        if (side == 0) bl.startPos = {static_cast<float>(rand() % (int)worldW), -50.f}; // Top
-                        else if (side == 1) bl.startPos = {worldW + 50.f, static_cast<float>(rand() % (int)worldH)}; // Right
-                        else if (side == 2) bl.startPos = {static_cast<float>(rand() % (int)worldW), worldH + 50.f}; // Bottom
-                        else bl.startPos = {-50.f, static_cast<float>(rand() % (int)worldH)}; // Left
-
-                        // Aim at player
-                        sf::Vector2f d = player.getPosition() - bl.startPos;
-                        float angle = std::atan2(d.y, d.x);
-                        bl.direction = {std::cos(angle), std::sin(angle)};
-                        
-                        bl.shape = sf::RectangleShape({3000.f, 2.f}); // Initialize shape
-                        bl.shape.setOrigin({0.f, 1.f});
-                        bl.shape.setPosition(bl.startPos);
-                        bl.shape.setRotation(sf::degrees(angle * 180.f / PI));
-                        bl.shape.setFillColor(sf::Color(0, 0, 255, 150)); // Blue warning
-
-                        borderLasers.push_back(bl);
-                        borderLaserSpawnTimer = 0.f;
-                    }
+                    static sf::Vector2f cp = bPos;
+                    cp += (pPos - cp) * 0.015f;
+                    boss.setPosition(cp + sf::Vector2f(std::cos(bossTimer * 3.f) * 200.f, std::sin(bossTimer * 3.f) * 200.f));
                 }
-
-                else if (currentPhase == 3) {
-                    // Shotgun Attack: 3 bullets towards center
-                    sf::Vector2f spawnPos = boss.getPosition();
-
-                    // Calculate angle towards center of screen
-                    float dx = (worldW / 2.f) - spawnPos.x;
-                    float dy = (worldH / 2.f) - spawnPos.y;
-                    float baseAngle = std::atan2(dy, dx) * 180.f / PI;
-
-                    // Spawn 3 bullets: Center, Left (-15 deg), Right (+15 deg)
-                    bullets.emplace_back(spawnPos, baseAngle, 12.0f);
-                    bullets.emplace_back(spawnPos, baseAngle - 15.f, 12.0f);
-                    bullets.emplace_back(spawnPos, baseAngle + 15.f, 12.0f);
-                    bullets.emplace_back(spawnPos, baseAngle - 30.f, 12.0f);
-                    bullets.emplace_back(spawnPos, baseAngle + 30.f, 12.0f);
-
-                    // Increment burst counter
-                    p4Burst++;
-                    if (p4Burst > 2) p4Burst = 0;
-                }
-                spawnTimer = 0.0f;
-            }
-
-            // Independent Turret Spawning for Phase 4
-            if (currentPhase == 3 && !isTransforming) {
-                turretSpawnTimer += dt;
-                if (turretSpawnTimer > 2.0f) {
-                    Turret t;
-                    t.shape = sf::CircleShape(40.f, 3);
-                    t.shape.setFillColor(sf::Color::Yellow);
-                    t.shape.setOrigin({40.f, 40.f});
-                    t.shape.setPosition({
-                        static_cast<float>(rand() % (int)(worldW - 200) + 100),
-                        static_cast<float>(rand() % (int)(worldH - 200) + 100)
-                    });
-                    t.timer = 0.f;
-                    t.hasShot = false;
-                    turrets.push_back(t);
-                    turretSpawnTimer = 0.f;
+                else if (currentPhase == 6) {
+                    float a = -bossTimer * 0.5f;
+                    boss.setPosition({worldW/2.f + std::cos(a) * (worldW/2.f - 100.f), worldH/2.f + std::sin(a) * (worldH/2.f - 100.f)});
                 }
             }
 
-            // Update Turrets & Lasers
-            for (auto& t : turrets) {
-                t.timer += dt;
-                
-                // Track player for 1.2s, then lock aim
-                if (t.timer < 1.2f) {
-                    sf::Vector2f d = player.getPosition() - t.shape.getPosition();
-                    float angle = std::atan2(d.y, d.x) * 180.f / PI;
-                    t.shape.setRotation(sf::degrees(angle + 90.f));
-                } else {
-                    // Warning color before shooting
-                    t.shape.setFillColor(sf::Color::Red);
+            // --- PLAYER CONTROLS ---
+            sf::Vector2f mvt{0.f, 0.f};
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W)) mvt.y -= 500.f * dt;
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S)) mvt.y += 500.f * dt;
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A)) mvt.x -= 500.f * dt;
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D)) mvt.x += 500.f * dt;
+            player.move(mvt);
+            
+            if (sf::Mouse::isButtonPressed(sf::Mouse::Button::Left) && shootTimer.getElapsedTime().asSeconds() > 0.12f) {
+                playerBullets.emplace_back(pPos, window.mapPixelToCoords(sf::Mouse::getPosition(window)));
+                shootTimer.restart();
+            }
+            
+            if (sf::Mouse::isButtonPressed(sf::Mouse::Button::Right) && shotgunTimer.getElapsedTime().asSeconds() > 0.5f) {
+                for (int i = 0; i < 360; i += 30) {
+                    float r = (float)i * PI / 180.f;
+                    playerBullets.emplace_back(pPos, pPos + sf::Vector2f(std::cos(r)*100.f, std::sin(r)*100.f));
+                }
+                shotgunTimer.restart();
+            }
+            
+            pPos = player.getPosition();
+            pPos.x = std::clamp(pPos.x, 15.f, worldW - 15.f);
+            pPos.y = std::clamp(pPos.y, 15.f, worldH - 15.f);
+            player.setPosition(pPos);
+
+            // --- SHOOTING LOGIC ---
+            if (isSurvival) {
+                survivalSpawnTimer += dt;
+                if (nextThreshold == 2) { // SURVIVAL 1: KNIFE WALL
+                    static float wT = 0.f;
+                    wT += dt;
                     
-                    // Indicator Line
-                    sf::RectangleShape line({2000.f, 2.f});
-                    line.setOrigin({0.f, 1.f});
-                    line.setPosition(t.shape.getPosition());
-                    line.setRotation(t.shape.getRotation() - sf::degrees(90.f));
-                    line.setFillColor(sf::Color(0, 0, 255, 100));
-                    warningLines.push_back(line);
-                }
-
-                // Fire after 1.7s (giving 0.5s reaction time)
-                if (t.timer > 1.7f && !t.hasShot) {
-                    Laser l;
-                    l.duration = 0.5f;
-                    l.startPos = t.shape.getPosition();
-                    float currentRot = t.shape.getRotation().asDegrees();
-                    float rad = (currentRot - 90.f) * PI / 180.f;
-                    l.direction = {std::cos(rad), std::sin(rad)};
-                    l.shape.setSize({2000.f, 50.f});
-                    l.shape.setOrigin({0.f, 25.f});
-                    l.shape.setPosition(l.startPos);
-                    l.shape.setRotation(sf::degrees(currentRot - 90.f));
-                    l.shape.setFillColor(sf::Color::Cyan);
-                    lasers.push_back(l);
-                    t.hasShot = true;
-                }
-            }
-            turrets.erase(std::remove_if(turrets.begin(), turrets.end(), [](const Turret& t){ return t.timer > 2.5f; }), turrets.end());
-
-            for (auto& l : lasers) {
-                l.duration -= dt;
-                sf::Vector2f p = player.getPosition();
-                sf::Vector2f s = l.startPos;
-                sf::Vector2f d = l.direction;
-                sf::Vector2f sp = p - s;
-                float projection = sp.x * d.x + sp.y * d.y;
-                if (projection > 0) {
-                    sf::Vector2f closest = s + d * projection;
-                    float distSq = std::pow(p.x - closest.x, 2) + std::pow(p.y - closest.y, 2);
-                    if (distSq < std::pow(40.f, 2)) {
-                         if (hitTimer.getElapsedTime().asSeconds() > 0.15f) {
-                            health -= 10.f;
-                            hitTimer.restart();
+                    float cHW = (12.f * 55.f) / 2.f;
+                    float lB = (worldW/2.f) - cHW, rB = (worldW/2.f) + cHW;
+                    leftVoid.setSize({lB, worldH});
+                    rightVoid.setSize({worldW - rB, worldH});
+                    rightVoid.setPosition({rB, 0.f});
+                    
+                    if (pPos.x < lB || pPos.x > rB) playerHealth = 0; // Void Kill
+                    
+                    if (wT > 1.1f) {
+                        int gS = rand() % 10;
+                        for (int i = 0; i < 12; ++i) {
+                            if (i == gS || i == gS + 1) continue;
+                            Bullet b({lB + (i*55.f), boss.getPosition().y}, 90.f, 8.f, 15.f);
+                            b.shape.setFillColor(sf::Color(220, 220, 220));
+                            b.shape.setScale({0.6f, 1.8f});
+                            bullets.push_back(b);
                         }
-                        player.setFillColor(sf::Color::White);
+                        wT = 0.f;
                     }
-                }
-            }
-            lasers.erase(std::remove_if(lasers.begin(), lasers.end(), [](const Laser& l){ return l.duration <= 0.f; }), lasers.end());
-
-            // Update Border Lasers (Phase 3)
-            for (auto& bl : borderLasers) {
-                bl.timer += dt;
-                if (bl.timer < 2.0f) {
-                    // Warning Phase
-                    bl.shape.setFillColor(sf::Color(0, 0, 255, 150)); // Blue
-                    bl.shape.setSize({3000.f, 5.f});
-                    bl.shape.setOrigin({0.f, 2.5f});
-                } else {
-                    // Firing Phase
-                    bl.shape.setFillColor(sf::Color::Cyan);
-                    bl.shape.setSize({3000.f, 50.f});
-                    bl.shape.setOrigin({0.f, 25.f});
-
-                    // Collision
-                    sf::Vector2f p = player.getPosition();
-                    sf::Vector2f s = bl.startPos;
-                    sf::Vector2f d = bl.direction;
-                    sf::Vector2f sp = p - s;
-                    float projection = sp.x * d.x + sp.y * d.y;
-                    if (projection > 0) {
-                        sf::Vector2f closest = s + d * projection;
-                        float distSq = std::pow(p.x - closest.x, 2) + std::pow(p.y - closest.y, 2);
-                        if (distSq < std::pow(40.f, 2)) { // 25 radius + 15 player
-                             if (hitTimer.getElapsedTime().asSeconds() > 0.15f) {
-                                health -= 10.f;
-                                hitTimer.restart();
+                } else if (nextThreshold == 3) { // SURVIVAL 2: DENSE CROSS + SIDE STREAMS
+                    if (survivalSpawnTimer > 0.08f) {
+                        static float cR = 0;
+                        cR += 2.0f;
+                        
+                        for (int i = 0; i < 4; i++) {
+                            float a = cR + (i * 90.f);
+                            for (float d = 60.f; d < 1200.f; d += 35.f) {
+                                float rad = a * PI / 180.f;
+                                bullets.push_back(Bullet(boss.getPosition() + sf::Vector2f(std::cos(rad)*d, std::sin(rad)*d), a, 0.0f, 11.0f, false, 0.12f));
+                                bullets.back().shape.setFillColor(sf::Color(0, 255, 100));
                             }
-                            player.setFillColor(sf::Color::White);
                         }
+                        
+                        // Corrected Color-fixed Side Streams
+                        sf::Vector2f sideSpawns[] = { {0, (float)(rand()%(int)worldH)}, {worldW, (float)(rand()%(int)worldH)}, {(float)(rand()%(int)worldW), 0}, {(float)(rand()%(int)worldW), worldH} };
+                        float sideAngles[] = { 0.f, 180.f, 90.f, 270.f };
+                        for (int k = 0; k < 4; ++k) {
+                            Bullet sb(sideSpawns[k], sideAngles[k], 7.f, 7.f);
+                            sb.shape.setFillColor(sf::Color(150, 255, 150));
+                            bullets.push_back(sb);
+                        }
+                        survivalSpawnTimer = 0.f;
+                    }
+                } else if (nextThreshold == 4) { // SURVIVAL 3: MIASMA + TOWERS
+                    if (survivalSpawnTimer > 0.05f) {
+                        static float tR = 0;
+                        tR += 2.0f;
+                        
+                        for (int i = 0; i < 4; i++) {
+                            float w = std::sin(survivalTimer * 5.f + i) * 15.f;
+                            bullets.push_back(Bullet(boss.getPosition(), tR + (i*90.f) + w, 7.f, 7.f));
+                            bullets.back().shape.setFillColor(sf::Color(255, 150, 0));
+                        }
+                        
+                        static float prT = 0;
+                        prT += survivalSpawnTimer;
+                        if (prT > 0.7f) {
+                            Bullet b(boss.getPosition(), (float)(rand()%360), 4.f, 15.f, true);
+                            b.shape.setFillColor(sf::Color::Yellow);
+                            bullets.push_back(b);
+                            prT = 0;
+                        }
+                        
+                        static float towerT = 0, towerR = 0;
+                        towerT += survivalSpawnTimer;
+                        towerR += 2.5f;
+                        if (towerT > 0.65f) {
+                            sf::Vector2f towerPos[] = {{100,100}, {worldW-100,100}, {100,worldH-100}, {worldW-100,worldH-100}};
+                            for (auto& tp : towerPos) {
+                                for (int j = 0; j < 360; j += 60) {
+                                    Bullet tb(tp, (float)j + towerR, 4.5f, 9.0f);
+                                    tb.shape.setFillColor(sf::Color(255, 100, 255));
+                                    bullets.push_back(tb);
+                                }
+                            }
+                            towerT = 0;
+                        }
+                        survivalSpawnTimer = 0.f;
+                    }
+                }
+            } else if (!isWarning && !isSurvivalWarning) {
+                spawnTimer += dt;
+                if (spawnTimer > 0.12f) {
+                    // --- NORMAL ATTACK PHASES ---
+                    if (currentPhase == 1) { // Spiral
+                        static float r = 0;
+                        r += 20.f;
+                        for (int i = 0; i < 360; i += 30) {
+                            bullets.emplace_back(boss.getPosition(), (float)i + r, 5.0f, 7.0f);
+                        }
+                        spawnTimer = -0.28f;
+                    }
+                    else if (currentPhase == 2) { // Rain
+                        for (int i = 0; i < 12; i++) {
+                            bullets.emplace_back(sf::Vector2f{(float)(rand() % (int)worldW), -20.f}, 90.f, 7.f + (rand() % 4), 7.f);
+                        }
+                        spawnTimer = -0.03f;
+                    }
+                    else if (currentPhase == 3) { // Gaps
+                        sf::Vector2f tp = player.getPosition() - boss.getPosition();
+                        float aP = std::atan2(tp.y, tp.x)*180.f/PI;
+                        for (int i = 0; i < 360; i += 10) {
+                            if (std::abs(std::fmod((float)i - aP + 540.f, 360.f) - 180.f) > 15.f) {
+                                Bullet b(boss.getPosition(), (float)i, 16.f, 7.f, false);
+                                b.isPhase3Shot = true;
+                                b.shape.setFillColor(sf::Color::Green);
+                                bullets.push_back(b);
+                            }
+                        }
+                        spawnTimer = -0.05f;
+                    }
+                    else if (currentPhase == 4) { // Cross
+                        static float r = 0;
+                        r += 15.f;
+                        for (int i = 0; i < 360; i += 60) {
+                            bullets.emplace_back(boss.getPosition(), (float)i + r, 13.f, 7.f);
+                            bullets.emplace_back(boss.getPosition(), (float)i + r, 8.f, 7.f);
+                        }
+                        spawnTimer = -0.18f;
+                    }
+                    else if (currentPhase == 5) { // Shotgun
+                        float a = std::atan2(pPos.y - boss.getPosition().y, pPos.x - boss.getPosition().x) * 180.f / PI;
+                        for (int i = -3; i <= 3; i++) {
+                            Bullet b(boss.getPosition(), a + (i * 15.f), 14.f, 25.f);
+                            b.shape.setFillColor(sf::Color(255, 165, 0));
+                            bullets.push_back(b);
+                        }
+                        spawnTimer = -0.38f;
+                    }
+                    else if (currentPhase == 6) { // Stream
+                        float a = std::atan2(pPos.y - boss.getPosition().y, pPos.x - boss.getPosition().x) * 180.f / PI;
+                        for (int i = -1; i <= 1; i++) {
+                            bullets.emplace_back(boss.getPosition(), a + (i * 10.f), 14.f, 9.f);
+                        }
+                        spawnTimer = 0.f;
                     }
                 }
             }
-            borderLasers.erase(std::remove_if(borderLasers.begin(), borderLasers.end(), [](const BorderLaser& bl){ return bl.timer > 2.5f; }), borderLasers.end());
 
-            // 7. Collision & Clean-up
-            auto it = std::remove_if(bullets.begin(), bullets.end(), [&](Bullet& b) {
-                b.update(dt);
-                auto pos = b.shape.getPosition();
-
-                float dx = pos.x - player.getPosition().x;
-                float dy = pos.y - player.getPosition().y;
-                if (std::sqrt(dx*dx + dy*dy) < (player.getRadius() + b.shape.getRadius())) {
-                    if (hitTimer.getElapsedTime().asSeconds() > 0.15f) {
-                        health -= 5.f;
-                        hitTimer.restart();
-                    }
-                    player.setFillColor(sf::Color::White);
+            // --- COLLISION, EXPLOSIONS, CLEANUP ---
+            std::vector<Bullet> shards;
+            for (auto it = playerBullets.begin(); it != playerBullets.end(); ) {
+                it->update();
+                if (it->shape.getGlobalBounds().findIntersection(boss.getGlobalBounds())) {
+                    if (!isSurvival) bossCurrentHP -= 15.f;
+                    it = playerBullets.erase(it);
+                } else if (it->shape.getPosition().x < 0 || it->shape.getPosition().x > worldW || 
+                          it->shape.getPosition().y < 0 || it->shape.getPosition().y > worldH) {
+                    it = playerBullets.erase(it);
                 } else {
-                    player.setFillColor(sf::Color::Cyan);
+                    ++it;
                 }
-                return (pos.x < -100 || pos.x > worldW + 100 || pos.y < -100 || pos.y > worldH + 100);
-            });
-            bullets.erase(it, bullets.end());
-
-            if (health <= 0) isGameOver = true;
+            }
+            auto itB = std::remove_if(bullets.begin(), bullets.end(), [&](Bullet& b) {
+                b.update(dt); if (b.isPoprock) { float d = std::sqrt(std::pow(b.shape.getPosition().x - b.startPos.x, 2) + std::pow(b.shape.getPosition().y - b.startPos.y, 2)); if (d > 400.f) { for (int j = 0; j < 360; j += 30) { Bullet s(b.shape.getPosition(), (float)j, 5.0f, 6.0f); s.shape.setFillColor(b.shape.getFillColor()); shards.push_back(s); } return true; } }
+                if (b.lifeTime > 0 && b.aliveTime >= b.lifeTime) return true; if (b.isPhase3Shot && (std::pow(b.shape.getPosition().x-b.startPos.x,2)+std::pow(b.shape.getPosition().y-b.startPos.y,2) > 850*850)) return true;
+                if (b.shape.getGlobalBounds().findIntersection(player.getGlobalBounds())) { if (hitTimer.getElapsedTime().asSeconds() > 0.15f) { playerHealth -= 10.f; hitTimer.restart(); } return true; }
+                return (b.shape.getPosition().x < -150 || b.shape.getPosition().x > worldW + 150 || b.shape.getPosition().y < -150 || b.shape.getPosition().y > worldH + 150);
+            }); bullets.erase(itB, bullets.end()); bullets.insert(bullets.end(), shards.begin(), shards.end());
+            bHPF.setSize({800.f * (std::max(0.f, bossCurrentHP / bossMaxHP)), 20.f});
+            hpF.setSize({40.f * (std::max(0.f, playerHealth / 1000.f)), 5.f});
+            hpB.setPosition({pPos.x, pPos.y + 25.f});
+            hpF.setPosition({pPos.x, pPos.y + 25.f});
+            
+            if (playerHealth <= 0) isGameOver = true;
+            if (bossCurrentHP <= 0) isVictory = true;
         }
 
-        // 8. Rendering
-        window.clear(sf::Color(15, 15, 15));
-        window.draw(boss);
-        for (auto& t : turrets) window.draw(t.shape);
-        for (auto& wl : warningLines) window.draw(wl);
-        for (auto& bl : borderLasers) window.draw(bl.shape);
-        for (auto& l : lasers) window.draw(l.shape);
-        window.draw(player);
-        window.draw(hpBarBack);
-        window.draw(hpBarFront);
+        // --- DRAWING ---
+        window.clear(sf::Color(10, 10, 15));
+        
+        if (!isVictory) window.draw(boss);
+        
+        if (isSurvival && nextThreshold == 2) {
+            window.draw(leftVoid);
+            window.draw(rightVoid);
+        }
+        
+        if (isSurvival && nextThreshold == 4) {
+            sf::RectangleShape tower({40.f, 40.f});
+            tower.setOrigin({20.f, 20.f});
+            tower.setFillColor(sf::Color(150, 0, 150));
+            sf::Vector2f towerPos[] = {{100,100}, {worldW-100,100}, {100,worldH-100}, {worldW-100,worldH-100}};
+            for (auto& tp : towerPos) {
+                tower.setPosition(tp);
+                window.draw(tower);
+            }
+        }
+        
         for (auto& b : bullets) window.draw(b.shape);
-        if (isGameOver) window.draw(deathScreen);
+        for (auto& pb : playerBullets) window.draw(pb.shape);
+        
+        window.draw(player);
+        window.draw(bHPB);
+        window.draw(bHPF);
+        window.draw(hpB);
+        window.draw(hpF);
+        
+        if (isGameOver) {
+            sf::RectangleShape ds({worldW, worldH});
+            ds.setFillColor({255,0,0,100});
+            window.draw(ds);
+        }
+        if (isVictory) {
+            sf::RectangleShape vs({worldW, worldH});
+            vs.setFillColor({0,255,100,100});
+            window.draw(vs);
+        }
+        
         window.display();
     }
     return 0;
