@@ -239,7 +239,7 @@ int main() {
                 fireRate = 0.1f;
             } else if (currentPhase == 3) {
                 // Fire fast (0.3s) for first 2 shots, then wait long (1.5s) for the 3rd reset
-                fireRate = (p4Burst < 5) ? 0.3f : 0.75f;
+                fireRate = (p4Burst < 2) ? 0.3f : 1.5f;
             }
 
             if (spawnTimer > fireRate && !isTransforming) {
@@ -256,7 +256,8 @@ int main() {
                         bullets.emplace_back(sf::Vector2f{randomX1, -50.f}, 90.f, 10.0f);
 
                         // 2. Bottom -> Up (Angle 270)
-                        
+                        float randomX2 = static_cast<float>(std::rand() % (int)worldW);
+                        bullets.emplace_back(sf::Vector2f{randomX2, worldH + 50.f}, 270.f, 10.0f);
                     }
                     spawnTimer = 0.0f;
                 }
