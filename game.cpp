@@ -178,9 +178,13 @@ int main() {
         }
 
             // Move Boss
-            if (currentPhase == 3) {
+            if (isTransforming) {
+                // Stay at center during transformation
+                boss.setPosition({worldW / 2.f, worldH / 2.f});
+            }
+            else if (currentPhase == 3) {
                 // Move along the border
-                float speed = 1200.f; // Speed of boss along border
+                float speed = 2000.f; // Speed of boss along border
                 float perimeter = 2 * (worldW + worldH);
                 float dist = std::fmod(bossTimer * speed, perimeter);
                 
@@ -235,7 +239,7 @@ int main() {
                 fireRate = 0.1f;
             } else if (currentPhase == 3) {
                 // Fire fast (0.3s) for first 2 shots, then wait long (1.5s) for the 3rd reset
-                fireRate = (p4Burst < 2) ? 0.3f : 1.5f;
+                fireRate = (p4Burst < 5) ? 0.3f : 0.75f;
             }
 
             if (spawnTimer > fireRate && !isTransforming) {
